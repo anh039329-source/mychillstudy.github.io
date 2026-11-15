@@ -1,0 +1,1381 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>StudyAI - Quản lý học tập & Lưu trữ tài liệu</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Google Fonts: Inter -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- React & ReactDOM -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <!-- Babel Standalone for JSX -->
+  <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: #f8fafc;
+    }
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #f1f5f9;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #94a3b8;
+    }
+  </style>
+</head>
+<body class="text-slate-800 antialiased">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // --- INDEXEDDB HELPER CHO TÀI LIỆU ---
+    const DB_NAME = 'StudyAI_Docs_DB';
+    const STORE_NAME = 'documents';
+    
+    const openDocsDB = () => {
+      return new Promise((resolve, reject) => {
+        const request = indexedDB.open(DB_NAME, 1);
+        request.onupgradeneeded = (e) => {
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains(STORE_NAME)) {
+            db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+          }
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+    };
+
+    const getAllDocsFromDB = async () => {
+      const db = await openDocsDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_NAME, 'readonly');
+        const store = tx.objectStore(STORE_NAME);
+        const req = store.getAll();
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => reject(req.error);
+      });
+    };
+
+    const saveDocToDB = async (docItem) => {
+      const db = await openDocsDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_NAME, 'readwrite');
+        const store = tx.objectStore(STORE_NAME);
+        const req = store.put(docItem);
+        req.onsuccess = () => resolve(true);
+        req.onerror = () => reject(req.error);
+      });
+    };
+
+    const deleteDocFromDB = async (id) => {
+      const db = await openDocsDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_NAME, 'readwrite');
+        const store = tx.objectStore(STORE_NAME);
+        const req = store.delete(id);
+        req.onsuccess = () => resolve(true);
+        req.onerror = () => reject(req.error);
+      });
+    };
+
+    // --- ICON COMPONENT ---
+    const Icon = ({ name, size = 18, className = "" }) => {
+      const iconRef = useRef(null);
+      useEffect(() => {
+        if (iconRef.current && window.lucide) {
+          iconRef.current.innerHTML = '';
+          const iconElement = document.createElement('i');
+          iconElement.setAttribute('data-lucide', name);
+          iconRef.current.appendChild(iconElement);
+          window.lucide.createIcons({
+            root: iconRef.current,
+            attrs: { width: size, height: size, class: className }
+          });
+        }
+      }, [name, size, className]);
+      return <span ref={iconRef} className="inline-flex items-center justify-center shrink-0"></span>;
+    };
+
+    // --- DATE HELPERS ---
+    const getTodayKey = (offsetDays = 0) => {
+      const d = new Date();
+      d.setDate(d.getDate() + offsetDays);
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+
+    const formatDateVN = (dateStr) => {
+      if (!dateStr) return '';
+      const [y, m, d] = dateStr.split('-');
+      return `${d}/${m}/${y}`;
+    };
+
+    const getShortDayLabel = (dateStr) => {
+      const [y, m, d] = dateStr.split('-').map(Number);
+      const dateObj = new Date(y, m - 1, d);
+      const days = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+      return `${days[dateObj.getDay()]} (${d}/${m})`;
+    };
+
+    // --- DEFAULT DATA ---
+    const DEFAULT_SUBJECTS = [
+      { id: 'sub-1', name: 'Toán học', color: 'bg-blue-500', textColor: 'text-blue-700', bgLight: 'bg-blue-50' },
+      { id: 'sub-2', name: 'Ngữ văn', color: 'bg-rose-500', textColor: 'text-rose-700', bgLight: 'bg-rose-50' },
+      { id: 'sub-3', name: 'Địa lí', color: 'bg-emerald-500', textColor: 'text-emerald-700', bgLight: 'bg-emerald-50' },
+      { id: 'sub-4', name: 'Tiếng Anh', color: 'bg-amber-500', textColor: 'text-amber-700', bgLight: 'bg-amber-50' },
+    ];
+
+    const DEFAULT_TODOS = [
+      { id: 'todo-1', title: 'Giải đề thi thử THPTQG số 01', subjectId: 'sub-1', priority: 'high', deadline: getTodayKey(0), completed: false },
+      { id: 'todo-2', title: 'Lập dàn ý phân tích tác phẩm văn học', subjectId: 'sub-2', priority: 'medium', deadline: getTodayKey(1), completed: false },
+      { id: 'todo-3', title: 'Ôn tập Atlat Địa lí Việt Nam', subjectId: 'sub-3', priority: 'low', deadline: getTodayKey(-1), completed: true },
+    ];
+
+    const DOC_CATEGORIES = ['Slide bài giảng', 'Giáo trình', 'Bài tập / Đồ án', 'Tài liệu tham khảo'];
+
+    const PRESET_COLORS = [
+      { color: 'bg-blue-500', textColor: 'text-blue-700', bgLight: 'bg-blue-50', name: 'Xanh dương' },
+      { color: 'bg-rose-500', textColor: 'text-rose-700', bgLight: 'bg-rose-50', name: 'Đỏ hồng' },
+      { color: 'bg-emerald-500', textColor: 'text-emerald-700', bgLight: 'bg-emerald-50', name: 'Xanh lá' },
+      { color: 'bg-amber-500', textColor: 'text-amber-700', bgLight: 'bg-amber-50', name: 'Vàng cam' },
+      { color: 'bg-purple-500', textColor: 'text-purple-700', bgLight: 'bg-purple-50', name: 'Tím' },
+      { color: 'bg-indigo-500', textColor: 'text-indigo-700', bgLight: 'bg-indigo-50', name: 'Chàm' },
+      { color: 'bg-cyan-500', textColor: 'text-cyan-700', bgLight: 'bg-cyan-50', name: 'Xanh ngọc' },
+      { color: 'bg-pink-500', textColor: 'text-pink-700', bgLight: 'bg-pink-50', name: 'Hồng' },
+    ];
+
+    function App() {
+      const [activeTab, setActiveTab] = useState('planner'); // 'planner' | 'storage' | 'stats'
+      const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+      const [isSubjectModalOpen, setIsSubjectModalOpen] = useState(false);
+
+      // API Key Settings
+      const [apiKey, setApiKey] = useState(() => localStorage.getItem('studyai_gemini_key') || '');
+      const [tempApiKey, setTempApiKey] = useState(apiKey);
+      const [keySavedToast, setKeySavedToast] = useState(false);
+
+      // Gamification & Streak
+      const [gamification, setGamification] = useState(() => {
+        const saved = localStorage.getItem('studyai_gamification');
+        if (saved) return JSON.parse(saved);
+        return { exp: 120, streak: 1, lastCheckInDate: null };
+      });
+      const [rewardToast, setRewardToast] = useState(null);
+
+      // Study Logs (Thống kê giờ học)
+      const [studyLogs, setStudyLogs] = useState(() => {
+        const saved = localStorage.getItem('studyai_study_logs');
+        if (saved) return JSON.parse(saved);
+        return {
+          [getTodayKey(-4)]: 2700,
+          [getTodayKey(-3)]: 4500,
+          [getTodayKey(-2)]: 1800,
+          [getTodayKey(-1)]: 5400,
+          [getTodayKey(0)]: 3600,
+        };
+      });
+
+      // Subjects & Todos
+      const [subjects, setSubjects] = useState(() => {
+        const saved = localStorage.getItem('studyai_subjects');
+        return saved ? JSON.parse(saved) : DEFAULT_SUBJECTS;
+      });
+      const [todos, setTodos] = useState(() => {
+        const saved = localStorage.getItem('studyai_todos');
+        return saved ? JSON.parse(saved) : DEFAULT_TODOS;
+      });
+
+      // New Subject Form state
+      const [newSubName, setNewSubName] = useState('');
+      const [selectedPresetColor, setSelectedPresetColor] = useState(PRESET_COLORS[0]);
+
+      // Todo Form & Filters
+      const [todoTitle, setTodoTitle] = useState('');
+      const [todoSubjectId, setTodoSubjectId] = useState(subjects[0]?.id || '');
+      const [todoPriority, setTodoPriority] = useState('medium');
+      const [todoDeadline, setTodoDeadline] = useState(getTodayKey(0));
+      const [filterSubject, setFilterSubject] = useState('all');
+
+      // Timer States
+      const [timerType, setTimerType] = useState('pomodoro');
+      const [pomodoroPhase, setPomodoroPhase] = useState('work');
+      const [customMinutes, setCustomMinutes] = useState(45);
+      const [secondsValue, setSecondsValue] = useState(25 * 60);
+      const [isRunning, setIsRunning] = useState(false);
+      const [pomodoroSessions, setPomodoroSessions] = useState(() => Number(localStorage.getItem('studyai_pomo_count')) || 0);
+
+      // Documents Storage State
+      const [documents, setDocuments] = useState([]);
+      const [isDocFormOpen, setIsDocFormOpen] = useState(false);
+      const [docTitle, setDocTitle] = useState('');
+      const [docSubject, setDocSubject] = useState(subjects[0]?.name || 'Toán học');
+      const [docCategory, setDocCategory] = useState(DOC_CATEGORIES[0]);
+      const [docSourceType, setDocSourceType] = useState('file');
+      const [docFile, setDocFile] = useState(null);
+      const [docLink, setDocLink] = useState('');
+      const [docError, setDocError] = useState('');
+      const [isSavingDoc, setIsSavingDoc] = useState(false);
+
+      const [filterDocCategory, setFilterDocCategory] = useState('all');
+      const [searchDocQuery, setSearchDocQuery] = useState('');
+
+      // Thống kê Filter Mode ('day', 'week', 'month', 'year')
+      const [statsMode, setStatsMode] = useState('week');
+      const [statsDateInput, setStatsDateInput] = useState(getTodayKey(0));
+
+      // Load docs from IndexedDB
+      useEffect(() => {
+        getAllDocsFromDB()
+          .then((items) => {
+            const sorted = items.sort((a, b) => b.createdAt - a.createdAt);
+            setDocuments(sorted);
+          })
+          .catch((err) => console.error('Lỗi tải tài liệu:', err));
+      }, []);
+
+      // LocalStorage Sync
+      useEffect(() => {
+        localStorage.setItem('studyai_subjects', JSON.stringify(subjects));
+        if (subjects.length > 0 && !subjects.find(s => s.id === todoSubjectId)) {
+          setTodoSubjectId(subjects[0].id);
+        }
+      }, [subjects]);
+
+      useEffect(() => { localStorage.setItem('studyai_todos', JSON.stringify(todos)); }, [todos]);
+      useEffect(() => { localStorage.setItem('studyai_pomo_count', pomodoroSessions.toString()); }, [pomodoroSessions]);
+      useEffect(() => { localStorage.setItem('studyai_gamification', JSON.stringify(gamification)); }, [gamification]);
+      useEffect(() => { localStorage.setItem('studyai_study_logs', JSON.stringify(studyLogs)); }, [studyLogs]);
+
+      // Reward toast helper
+      const triggerRewardToast = (msg) => {
+        setRewardToast(msg);
+        setTimeout(() => setRewardToast(null), 3200);
+      };
+
+      const addExp = (amount, reason) => {
+        setGamification(prev => ({ ...prev, exp: prev.exp + amount }));
+        if (reason) triggerRewardToast(`+${amount} EXP • ${reason}`);
+      };
+
+      const recordStudySeconds = (secs) => {
+        if (secs <= 0) return;
+        const today = getTodayKey(0);
+        setStudyLogs(prev => ({ ...prev, [today]: (prev[today] || 0) + secs }));
+      };
+
+      // Check-in handlers
+      const todayStr = getTodayKey(0);
+      const yesterdayStr = getTodayKey(-1);
+      const isCheckedInToday = gamification.lastCheckInDate === todayStr;
+      const currentDisplayStreak =
+        gamification.lastCheckInDate === todayStr || gamification.lastCheckInDate === yesterdayStr
+          ? gamification.streak
+          : (gamification.lastCheckInDate ? 0 : gamification.streak);
+
+      const handleDailyCheckIn = () => {
+        if (isCheckedInToday) return;
+        const newStreak = gamification.lastCheckInDate === yesterdayStr ? gamification.streak + 1 : 1;
+        const bonusExp = 50 + Math.min(newStreak * 10, 100);
+
+        setGamification({
+          exp: gamification.exp + bonusExp,
+          streak: newStreak,
+          lastCheckInDate: todayStr
+        });
+        triggerRewardToast(`Điểm danh thành công! +${bonusExp} EXP (Chuỗi ${newStreak} ngày 🔥)`);
+      };
+
+      // --- MỀM MẠI, DỄ CHỊU WEB AUDIO CHIME KHI KẾT THÚC ĐỒNG HỒ ---
+      const playGentleChime = () => {
+        try {
+          const ctx = new (window.AudioContext || window.webkitAudioContext)();
+          const now = ctx.currentTime;
+          
+          [523.25, 659.25, 783.99, 1046.50].forEach((freq, index) => {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(freq, now + index * 0.12);
+
+            gain.gain.setValueAtTime(0, now + index * 0.12);
+            gain.gain.linearRampToValueAtTime(0.08, now + index * 0.12 + 0.05);
+            gain.gain.exponentialRampToValueAtTime(0.0001, now + index * 0.12 + 1.8);
+
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+
+            osc.start(now + index * 0.12);
+            osc.stop(now + index * 0.12 + 2.0);
+          });
+        } catch (e) {
+          console.log('Audio error:', e);
+        }
+      };
+
+      // --- TIMER EFFECT ---
+      useEffect(() => {
+        let interval = null;
+        if (isRunning) {
+          interval = setInterval(() => {
+            if (timerType === 'countup') {
+              setSecondsValue(prev => prev + 1);
+              recordStudySeconds(1);
+            } else {
+              setSecondsValue(prev => {
+                if (prev > 1) {
+                  if (timerType === 'countdown' || (timerType === 'pomodoro' && pomodoroPhase === 'work')) {
+                    recordStudySeconds(1);
+                  }
+                  return prev - 1;
+                } else {
+                  setIsRunning(false);
+                  playGentleChime();
+                  if (timerType === 'pomodoro') {
+                    if (pomodoroPhase === 'work') {
+                      recordStudySeconds(1);
+                      setPomodoroSessions(s => s + 1);
+                      addExp(30, 'Hoàn thành phiên Pomodoro!');
+                      setPomodoroPhase('break');
+                      return 5 * 60;
+                    } else {
+                      setPomodoroPhase('work');
+                      return 25 * 60;
+                    }
+                  } else if (timerType === 'countdown') {
+                    recordStudySeconds(1);
+                    addExp(25, 'Hoàn thành mục tiêu đếm ngược!');
+                    return customMinutes * 60;
+                  }
+                  return 0;
+                }
+              });
+            }
+          }, 1000);
+        }
+        return () => clearInterval(interval);
+      }, [isRunning, timerType, pomodoroPhase, customMinutes]);
+
+      const handleSelectTimerType = (type) => {
+        setIsRunning(false);
+        setTimerType(type);
+        if (type === 'pomodoro') {
+          setPomodoroPhase('work');
+          setSecondsValue(25 * 60);
+        } else if (type === 'countdown') {
+          setSecondsValue(customMinutes * 60);
+        } else {
+          setSecondsValue(0);
+        }
+      };
+
+      const handleResetTimer = () => {
+        setIsRunning(false);
+        if (timerType === 'pomodoro') {
+          setSecondsValue(pomodoroPhase === 'work' ? 25 * 60 : 5 * 60);
+        } else if (timerType === 'countdown') {
+          setSecondsValue(customMinutes * 60);
+        } else {
+          if (secondsValue >= 60) {
+            const earnedExp = Math.floor(secondsValue / 60) * 2;
+            addExp(earnedExp, `Lưu phiên bấm giờ ${Math.floor(secondsValue / 60)} phút!`);
+          }
+          setSecondsValue(0);
+        }
+      };
+
+      const formatTimeDisplay = (totalSeconds) => {
+        const hrs = Math.floor(totalSeconds / 3600);
+        const mins = Math.floor((totalSeconds % 3600) / 60).toString().padStart(2, '0');
+        const secs = (totalSeconds % 60).toString().padStart(2, '0');
+        return hrs > 0 ? `${hrs.toString().padStart(2, '0')}:${mins}:${secs}` : `${mins}:${secs}`;
+      };
+
+      // --- ADD SUBJECT HANDLER ---
+      const handleAddSubject = (e) => {
+        e.preventDefault();
+        if (!newSubName.trim()) return;
+        const newSub = {
+          id: 'sub-' + Date.now(),
+          name: newSubName.trim(),
+          color: selectedPresetColor.color,
+          textColor: selectedPresetColor.textColor,
+          bgLight: selectedPresetColor.bgLight
+        };
+        setSubjects([...subjects, newSub]);
+        setNewSubName('');
+        setIsSubjectModalOpen(false);
+        triggerRewardToast(`Đã thêm môn học: ${newSub.name}`);
+      };
+
+      // --- DEADLINE STATUS CALCULATOR ---
+      const getDeadlineStatus = (deadlineStr) => {
+        if (!deadlineStr) return { text: 'Không có hạn', color: 'text-slate-500 bg-slate-100', icon: 'calendar' };
+        
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        
+        const [y, m, d] = deadlineStr.split('-').map(Number);
+        const targetDate = new Date(y, m - 1, d);
+        targetDate.setHours(0, 0, 0, 0);
+
+        const diffTime = targetDate - today;
+        const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+
+        if (diffDays < 0) {
+          return { text: `Quá hạn!! (${formatDateVN(deadlineStr)})`, color: 'text-red-700 bg-red-100 border border-red-200', icon: 'alert-triangle' };
+        } else if (diffDays === 0) {
+          return { text: 'Đến hạn rồi!', color: 'text-amber-700 bg-amber-100 border border-amber-200', icon: 'clock' };
+        } else if (diffDays === 1) {
+          return { text: 'Còn 1 ngày là đến hạn', color: 'text-orange-700 bg-orange-100 border border-orange-200', icon: 'hourglass' };
+        } else {
+          return { text: `Còn ${diffDays} ngày là đến hạn`, color: 'text-emerald-700 bg-emerald-100 border border-emerald-200', icon: 'calendar-check' };
+        }
+      };
+
+      // --- TODO HANDLERS ---
+      const handleAddTodo = (e) => {
+        e.preventDefault();
+        if (!todoTitle.trim()) return;
+        const newTodo = {
+          id: 'todo-' + Date.now(),
+          title: todoTitle.trim(),
+          subjectId: todoSubjectId || subjects[0]?.id || '',
+          priority: todoPriority,
+          deadline: todoDeadline,
+          completed: false
+        };
+        setTodos([newTodo, ...todos]);
+        setTodoTitle('');
+      };
+
+      const toggleTodo = (id) => {
+        setTodos(todos.map(t => {
+          if (t.id === id) {
+            const nextState = !t.completed;
+            if (nextState) addExp(15, 'Hoàn thành nhiệm vụ học tập!');
+            return { ...t, completed: nextState };
+          }
+          return t;
+        }));
+      };
+
+      const deleteTodo = (id) => { setTodos(todos.filter(t => t.id !== id)); };
+
+      // --- DOCUMENT STORAGE HANDLERS ---
+      const handleSaveDocument = async (e) => {
+        e.preventDefault();
+        setDocError('');
+        if (!docTitle.trim() || !docSubject.trim()) {
+          setDocError('Vui lòng nhập tên tài liệu và môn học.');
+          return;
+        }
+        if (docSourceType === 'file' && !docFile) {
+          setDocError('Vui lòng chọn tệp tài liệu.');
+          return;
+        }
+        if (docSourceType === 'link' && !docLink.trim()) {
+          setDocError('Vui lòng nhập URL tài liệu.');
+          return;
+        }
+
+        setIsSavingDoc(true);
+        try {
+          const newDoc = {
+            id: 'doc-' + Date.now(),
+            title: docTitle.trim(),
+            subject: docSubject.trim(),
+            category: docCategory,
+            sourceType: docSourceType,
+            fileName: docSourceType === 'file' ? docFile.name : null,
+            fileSize: docSourceType === 'file' ? docFile.size : 0,
+            fileBlob: docSourceType === 'file' ? docFile : null,
+            linkUrl: docSourceType === 'link' ? docLink.trim() : null,
+            createdAt: Date.now(),
+            dateStr: getTodayKey(0)
+          };
+          await saveDocToDB(newDoc);
+          setDocuments([newDoc, ...documents]);
+          setDocTitle('');
+          setDocFile(null);
+          setDocLink('');
+          setIsDocFormOpen(false);
+          addExp(20, 'Lưu trữ tài liệu học tập mới!');
+        } catch (err) {
+          setDocError('Lỗi khi lưu tài liệu: ' + err.message);
+        } finally {
+          setIsSavingDoc(false);
+        }
+      };
+
+      const handleOpenOrDownloadDoc = (doc) => {
+        if (doc.sourceType === 'link' && doc.linkUrl) {
+          const url = doc.linkUrl.startsWith('http') ? doc.linkUrl : 'https://' + doc.linkUrl;
+          window.open(url, '_blank', 'noopener,noreferrer');
+        } else if (doc.sourceType === 'file' && doc.fileBlob) {
+          const blobUrl = URL.createObjectURL(doc.fileBlob);
+          const a = document.createElement('a');
+          a.href = blobUrl;
+          a.download = doc.fileName || doc.title;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+        }
+      };
+
+      const handleDeleteDoc = async (id) => {
+        await deleteDocFromDB(id);
+        setDocuments(documents.filter(d => d.id !== id));
+      };
+
+      // --- CALCULATIONS & STATS COMPUTATION ---
+      const currentLevel = Math.floor(gamification.exp / 200) + 1;
+      const expInCurrentLevel = gamification.exp % 200;
+      const expLevelProgress = Math.round((expInCurrentLevel / 200) * 100);
+
+      const filteredTodos = todos.filter(t => filterSubject === 'all' || t.subjectId === filterSubject);
+
+      const getFilteredStatsData = () => {
+        const [targetY, targetM, targetD] = statsDateInput.split('-').map(Number);
+        
+        if (statsMode === 'day') {
+          const secs = studyLogs[statsDateInput] || 0;
+          return [{ label: formatDateVN(statsDateInput), seconds: secs, minutes: Math.round(secs / 60) }];
+        } else if (statsMode === 'week') {
+          const result = [];
+          for (let i = 6; i >= 0; i--) {
+            const dObj = new Date(targetY, targetM - 1, targetD - i);
+            const y = dObj.getFullYear();
+            const m = String(dObj.getMonth() + 1).padStart(2, '0');
+            const day = String(dObj.getDate()).padStart(2, '0');
+            const key = `${y}-${m}-${day}`;
+            const secs = studyLogs[key] || 0;
+            result.push({ label: `${day}/${m}`, seconds: secs, minutes: Math.round(secs / 60) });
+          }
+          return result;
+        } else if (statsMode === 'month') {
+          const result = [];
+          const daysInMonth = new Date(targetY, targetM, 0).getDate();
+          for (let d = 1; d <= daysInMonth; d++) {
+            const mStr = String(targetM).padStart(2, '0');
+            const dStr = String(d).padStart(2, '0');
+            const key = `${targetY}-${mStr}-${dStr}`;
+            const secs = studyLogs[key] || 0;
+            result.push({ label: `${dStr}/${mStr}`, seconds: secs, minutes: Math.round(secs / 60) });
+          }
+          return result;
+        } else {
+          const result = [];
+          for (let m = 1; m <= 12; m++) {
+            let totalSecs = 0;
+            const mStr = String(m).padStart(2, '0');
+            Object.keys(studyLogs).forEach(k => {
+              if (k.startsWith(`${targetY}-${mStr}`)) {
+                totalSecs += studyLogs[k];
+              }
+            });
+            result.push({ label: `Tháng ${m}`, seconds: totalSecs, minutes: Math.round(totalSecs / 60) });
+          }
+          return result;
+        }
+      };
+
+      const statsChartData = getFilteredStatsData();
+      const totalStatsMinutes = statsChartData.reduce((acc, item) => acc + item.minutes, 0);
+      const maxStatsMinutes = Math.max(...statsChartData.map(i => i.minutes), 60);
+
+      return (
+        <div className="min-h-screen flex flex-col">
+          {/* --- FLOATING TOAST --- */}
+          {rewardToast && (
+            <div className="fixed bottom-5 right-5 z-50 bg-slate-900 text-white px-4 py-3 rounded-2xl shadow-xl border border-slate-700 flex items-center gap-2.5 text-xs sm:text-sm font-medium animate-bounce">
+              <span className="w-6 h-6 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center">
+                <Icon name="zap" size={15} />
+              </span>
+              <span>{rewardToast}</span>
+            </div>
+          )}
+
+          {/* --- TOP NAVIGATION BAR --- */}
+          <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-slate-200">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-indigo-600 flex items-center justify-center text-white shadow-sm shadow-indigo-200">
+                  <Icon name="graduation-cap" size={20} />
+                </div>
+                <div>
+                  <span className="font-bold text-lg tracking-tight text-slate-900">Study<span className="text-indigo-600">AI</span></span>
+                  <span className="hidden lg:inline-block ml-2 text-xs font-medium px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-600">GDPT 2018</span>
+                </div>
+              </div>
+
+              <nav className="flex items-center bg-slate-100 p-1 rounded-xl gap-1">
+                <button
+                  onClick={() => setActiveTab('planner')}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-all ${
+                    activeTab === 'planner' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Icon name="layout-dashboard" size={16} />
+                  <span>Quản lý học tập</span>
+                </button>
+                <button
+                  onClick={() => setActiveTab('storage')}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-all ${
+                    activeTab === 'storage' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Icon name="folder-open" size={16} />
+                  <span>Lưu trữ tài liệu học</span>
+                </button>
+                <button
+                  onClick={() => setActiveTab('stats')}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-all ${
+                    activeTab === 'stats' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Icon name="bar-chart-2" size={16} />
+                  <span>Thống kê</span>
+                </button>
+              </nav>
+
+              <div className="flex items-center gap-2">
+                <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-amber-50 border border-amber-200/80 text-xs font-semibold text-amber-800">
+                  <Icon name="flame" size={15} className="text-orange-500" />
+                  <span>{currentDisplayStreak} ngày</span>
+                  <span className="text-amber-300">|</span>
+                  <span className="text-indigo-700">{gamification.exp} EXP</span>
+                </div>
+                <button
+                  onClick={() => { setTempApiKey(apiKey); setIsSettingsOpen(true); }}
+                  className={`flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium border transition-colors ${
+                    apiKey ? 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50' : 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100'
+                  }`}
+                >
+                  <Icon name="settings" size={16} />
+                  <span className="hidden md:inline">{apiKey ? 'API Key' : 'Nhập Key'}</span>
+                </button>
+              </div>
+            </div>
+          </header>
+
+          {/* --- MAIN BODY --- */}
+          <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+
+            {/* TAB 1: QUẢN LÝ HỌC TẬP & TIMER */}
+            {activeTab === 'planner' && (
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                <div className="lg:col-span-4 space-y-6">
+                  
+                  {/* ĐIỂM DANH & STREAK */}
+                  <div className="bg-gradient-to-br from-indigo-600 via-indigo-700 to-violet-700 rounded-2xl p-5 text-white shadow-md space-y-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-white/15 text-xs font-semibold">
+                          <Icon name="award" size={13} className="text-amber-300" />
+                          <span>Cấp độ {currentLevel}</span>
+                        </div>
+                        <div className="flex items-baseline gap-2 mt-2">
+                          <span className="text-2xl font-extrabold tracking-tight">{gamification.exp}</span>
+                          <span className="text-xs font-medium text-indigo-200">EXP tích lũy</span>
+                        </div>
+                      </div>
+                      <div className="text-right bg-white/10 px-3 py-2 rounded-xl border border-white/15">
+                        <div className="flex items-center justify-end gap-1 text-amber-300 font-bold text-lg">
+                          <Icon name="flame" size={20} className="fill-amber-400 text-amber-300" />
+                          <span>{currentDisplayStreak}</span>
+                        </div>
+                        <p className="text-[11px] text-indigo-100 font-medium">Chuỗi Streak</p>
+                      </div>
+                    </div>
+
+                    <div className="bg-white/10 p-3 rounded-xl border border-white/15">
+                      <p className="text-xs font-medium text-indigo-100 mb-2 flex items-center justify-between">
+                        <span>Chuỗi ngày học liên tục</span>
+                        <span className="text-amber-300 font-bold">{currentDisplayStreak} ngày 🔥</span>
+                      </p>
+                      <div className="grid grid-cols-7 gap-1.5">
+                        {Array.from({ length: 7 }, (_, i) => {
+                          const dateKey = getTodayKey(i - 6);
+                          const isStudied = studyLogs[dateKey] && studyLogs[dateKey] > 0;
+                          const isToday = i === 6;
+                          return (
+                            <div key={dateKey} className="flex flex-col items-center gap-1">
+                              <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold transition-all ${
+                                isStudied ? 'bg-amber-400 text-slate-900 shadow-sm' : 'bg-white/10 text-indigo-300'
+                              } ${isToday ? 'ring-2 ring-white' : ''}`}>
+                                {isStudied ? '✓' : '•'}
+                              </div>
+                              <span className="text-[10px] text-indigo-200">{getShortDayLabel(dateKey).split(' ')[1].replace('/', '')}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-[11px] text-indigo-200">
+                        <span>Tiến độ lên Cấp {currentLevel + 1}</span>
+                        <span>{expInCurrentLevel}/200 EXP</span>
+                      </div>
+                      <div className="w-full bg-black/20 h-2 rounded-full overflow-hidden">
+                        <div className="bg-amber-400 h-full rounded-full transition-all duration-500" style={{ width: `${expLevelProgress}%` }}></div>
+                      </div>
+                    </div>
+
+                    <div className="pt-2 border-t border-white/15 flex items-center justify-between">
+                      <div className="text-xs text-indigo-100">
+                        {isCheckedInToday ? 'Đã điểm danh hôm nay! 🎉' : 'Điểm danh nhận EXP!'}
+                      </div>
+                      <button
+                        onClick={handleDailyCheckIn}
+                        disabled={isCheckedInToday}
+                        className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all shadow-sm ${
+                          isCheckedInToday ? 'bg-white/20 text-indigo-200 cursor-not-allowed' : 'bg-amber-400 text-slate-900 hover:bg-amber-300'
+                        }`}
+                      >
+                        {isCheckedInToday ? 'Đã điểm danh' : 'Điểm danh ngay'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* BỘ ĐẾM GIỜ HỌC TẬP */}
+                  <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs space-y-4">
+                    <div className="flex items-center justify-between">
+                      <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                        <Icon name="clock" size={17} className="text-indigo-600" />
+                        <span>Bộ đếm giờ học tập</span>
+                      </h3>
+                      <div className="flex bg-slate-100 p-0.5 rounded-lg text-xs font-medium">
+                        <button onClick={() => handleSelectTimerType('pomodoro')} className={`px-2.5 py-1 rounded-md transition-all ${timerType === 'pomodoro' ? 'bg-white text-indigo-600 shadow-xs' : 'text-slate-600'}`}>Pomo</button>
+                        <button onClick={() => handleSelectTimerType('countdown')} className={`px-2.5 py-1 rounded-md transition-all ${timerType === 'countdown' ? 'bg-white text-indigo-600 shadow-xs' : 'text-slate-600'}`}>Đếm ngược</button>
+                        <button onClick={() => handleSelectTimerType('countup')} className={`px-2.5 py-1 rounded-md transition-all ${timerType === 'countup' ? 'bg-white text-indigo-600 shadow-xs' : 'text-slate-600'}`}>Bấm giờ</button>
+                      </div>
+                    </div>
+
+                    {timerType === 'pomodoro' && (
+                      <div className="flex items-center justify-center gap-2 text-xs font-medium">
+                        <button onClick={() => { setPomodoroPhase('work'); setSecondsValue(25*60); setIsRunning(false); }} className={`px-3 py-1 rounded-full ${pomodoroPhase === 'work' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600'}`}>Tập trung (25m)</button>
+                        <button onClick={() => { setPomodoroPhase('break'); setSecondsValue(5*60); setIsRunning(false); }} className={`px-3 py-1 rounded-full ${pomodoroPhase === 'break' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600'}`}>Nghỉ (5m)</button>
+                      </div>
+                    )}
+
+                    {timerType === 'countdown' && (
+                      <div className="flex items-center justify-center gap-2 text-xs">
+                        <span className="text-slate-500 font-medium">Thời gian:</span>
+                        <input
+                          type="number"
+                          min="1"
+                          max="300"
+                          value={customMinutes}
+                          onChange={(e) => {
+                            const val = Math.max(1, Number(e.target.value) || 1);
+                            setCustomMinutes(val);
+                            if (!isRunning) setSecondsValue(val * 60);
+                          }}
+                          className="w-16 px-2 py-1 border border-slate-200 rounded-lg text-center font-bold text-slate-800"
+                        />
+                        <span className="text-slate-500">phút</span>
+                      </div>
+                    )}
+
+                    <div className="text-center py-4 bg-slate-50 rounded-xl border border-slate-100">
+                      <div className="text-4xl sm:text-5xl font-extrabold tracking-tight text-slate-900 font-mono">
+                        {formatTimeDisplay(secondsValue)}
+                      </div>
+                      <p className="text-xs text-slate-500 mt-2">
+                        {timerType === 'pomodoro' ? (pomodoroPhase === 'work' ? 'Phiên làm việc tập trung' : 'Thời gian nghỉ ngơi thư giãn') : (timerType === 'countdown' ? 'Đếm ngược mục tiêu' : 'Đang ghi nhận thời gian học')}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setIsRunning(!isRunning)}
+                        className={`flex-1 py-2.5 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-2 text-white shadow-sm transition-all ${
+                          isRunning ? 'bg-amber-600 hover:bg-amber-700' : 'bg-indigo-600 hover:bg-indigo-700'
+                        }`}
+                      >
+                        <Icon name={isRunning ? "pause" : "play"} size={16} />
+                        <span>{isRunning ? 'Tạm dừng' : 'Bắt đầu học'}</span>
+                      </button>
+                      <button
+                        onClick={handleResetTimer}
+                        className="px-3.5 py-2.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-semibold flex items-center justify-center"
+                        title="Đặt lại / Lưu giờ"
+                      >
+                        <Icon name="rotate-ccw" size={16} />
+                      </button>
+                    </div>
+                  </div>
+
+                </div>
+
+                <div className="lg:col-span-8 space-y-6">
+                  
+                  {/* QUẢN LÝ MÔN HỌC */}
+                  <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs space-y-4">
+                    <div className="flex items-center justify-between">
+                      <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                        <Icon name="book-open" size={17} className="text-indigo-600" />
+                        <span>Danh sách môn học ({subjects.length})</span>
+                      </h3>
+                      <button
+                        onClick={() => setIsSubjectModalOpen(true)}
+                        className="px-3 py-1.5 rounded-xl bg-indigo-50 text-indigo-600 hover:bg-indigo-100 text-xs font-bold flex items-center gap-1.5 transition-colors"
+                      >
+                        <Icon name="plus" size={15} />
+                        <span>Thêm môn học</span>
+                      </button>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        onClick={() => setFilterSubject('all')}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                          filterSubject === 'all' ? 'bg-slate-900 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        Tất cả môn
+                      </button>
+                      {subjects.map(sub => (
+                        <button
+                          key={sub.id}
+                          onClick={() => setFilterSubject(sub.id)}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                            filterSubject === sub.id ? `${sub.color} text-white shadow-sm` : `${sub.bgLight} ${sub.textColor} hover:opacity-80`
+                          }`}
+                        >
+                          <span className={`w-2 h-2 rounded-full ${filterSubject === sub.id ? 'bg-white' : sub.color}`}></span>
+                          <span>{sub.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* CHECKLIST NHIỆM VỤ */}
+                  <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs space-y-5">
+                    <div className="flex items-center justify-between">
+                      <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                        <Icon name="check-square" size={17} className="text-indigo-600" />
+                        <span>Nhiệm vụ học tập cần hoàn thành</span>
+                      </h3>
+                      <span className="text-xs font-medium text-slate-500">
+                        Đã làm: {todos.filter(t => t.completed).length}/{todos.length}
+                      </span>
+                    </div>
+
+                    <form onSubmit={handleAddTodo} className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 p-3.5 bg-slate-50 rounded-xl border border-slate-200">
+                      <input
+                        type="text"
+                        placeholder="Nhập tên nhiệm vụ, bài tập cần làm..."
+                        value={todoTitle}
+                        onChange={(e) => setTodoTitle(e.target.value)}
+                        className="sm:col-span-5 px-3 py-2 rounded-lg border border-slate-200 bg-white text-xs focus:outline-indigo-600"
+                      />
+                      <select
+                        value={todoSubjectId}
+                        onChange={(e) => setTodoSubjectId(e.target.value)}
+                        className="sm:col-span-3 px-3 py-2 rounded-lg border border-slate-200 bg-white text-xs focus:outline-indigo-600"
+                      >
+                        {subjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                      </select>
+                      <input
+                        type="date"
+                        value={todoDeadline}
+                        onChange={(e) => setTodoDeadline(e.target.value)}
+                        className="sm:col-span-3 px-3 py-2 rounded-lg border border-slate-200 bg-white text-xs focus:outline-indigo-600"
+                      />
+                      <button
+                        type="submit"
+                        className="sm:col-span-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg flex items-center justify-center p-2 text-xs font-bold transition-colors"
+                        title="Thêm nhiệm vụ"
+                      >
+                        <Icon name="plus" size={16} />
+                      </button>
+                    </form>
+
+                    <div className="space-y-2.5">
+                      {filteredTodos.length === 0 ? (
+                        <div className="text-center py-8 text-slate-400 text-xs">Không có nhiệm vụ nào trong danh mục này.</div>
+                      ) : (
+                        filteredTodos.map(todo => {
+                          const sub = subjects.find(s => s.id === todo.subjectId);
+                          const deadlineInfo = getDeadlineStatus(todo.deadline);
+                          return (
+                            <div
+                              key={todo.id}
+                              className={`p-3.5 rounded-xl border transition-all flex items-start sm:items-center justify-between gap-3 ${
+                                todo.completed ? 'bg-slate-50 border-slate-200 opacity-75' : 'bg-white border-slate-200 hover:border-indigo-200'
+                              }`}
+                            >
+                              <div className="flex items-start gap-3 flex-1 min-w-0">
+                                <input
+                                  type="checkbox"
+                                  checked={todo.completed}
+                                  onChange={() => toggleTodo(todo.id)}
+                                  className="w-4 h-4 mt-0.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                                />
+                                <div className="space-y-1 min-w-0 flex-1">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className={`text-xs font-semibold ${todo.completed ? 'line-through text-slate-400' : 'text-slate-900'}`}>
+                                      {todo.title}
+                                    </span>
+                                    {sub && (
+                                      <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${sub.bgLight} ${sub.textColor}`}>
+                                        {sub.name}
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  <div className="flex items-center gap-2 text-[11px]">
+                                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-medium ${deadlineInfo.color}`}>
+                                      <Icon name={deadlineInfo.icon} size={12} />
+                                      <span>{deadlineInfo.text}</span>
+                                    </span>
+                                    <span className="text-slate-400">• Hạn: {formatDateVN(todo.deadline)}</span>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <button
+                                onClick={() => deleteTodo(todo.id)}
+                                className="text-slate-400 hover:text-red-600 p-1 transition-colors"
+                                title="Xóa nhiệm vụ"
+                              >
+                                <Icon name="trash-2" size={15} />
+                              </button>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+
+                </div>
+              </div>
+            )}
+
+            {/* TAB 2: LƯU TRỮ TÀI LIỆU HỌC */}
+            {activeTab === 'storage' && (
+              <div className="space-y-6">
+                <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-lg font-bold text-slate-900">Kho Lưu Trữ Tài Liệu Học Tập</h2>
+                    <p className="text-xs text-slate-500">Lưu trữ slide, giáo trình, bài tập và liên kết học tập an toàn trên trình duyệt.</p>
+                  </div>
+                  <button
+                    onClick={() => setIsDocFormOpen(true)}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-2 transition-colors shadow-sm"
+                  >
+                    <Icon name="upload" size={16} />
+                    <span>Thêm tài liệu mới</span>
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
+                  <div className="sm:col-span-8 relative">
+                    <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                      <Icon name="search" size={16} />
+                    </span>
+                    <input
+                      type="text"
+                      placeholder="Tìm kiếm theo tên tài liệu hoặc môn học..."
+                      value={searchDocQuery}
+                      onChange={(e) => setSearchDocQuery(e.target.value)}
+                      className="w-full pl-9 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl text-xs focus:outline-indigo-600"
+                    />
+                  </div>
+                  <div className="sm:col-span-4">
+                    <select
+                      value={filterDocCategory}
+                      onChange={(e) => setFilterDocCategory(e.target.value)}
+                      className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-xl text-xs focus:outline-indigo-600 font-medium"
+                    >
+                      <option value="all">Tất cả danh mục</option>
+                      {DOC_CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {filteredDocs.length === 0 ? (
+                    <div className="col-span-full text-center py-12 bg-white rounded-2xl border border-slate-200 text-slate-400 text-xs">
+                      Chưa có tài liệu nào được lưu trữ. Nhấn "Thêm tài liệu mới" để bắt đầu.
+                    </div>
+                  ) : (
+                    filteredDocs.map(doc => (
+                      <div key={doc.id} className="bg-white rounded-2xl p-4 border border-slate-200 shadow-xs flex flex-col justify-between space-y-3 hover:border-indigo-200 transition-all">
+                        <div className="space-y-2">
+                          <div className="flex items-start justify-between gap-2">
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-700">
+                              {doc.category}
+                            </span>
+                            <span className="text-[10px] text-slate-400">{formatDateVN(doc.dateStr)}</span>
+                          </div>
+                          <div>
+                            <h4 className="font-bold text-slate-900 text-sm line-clamp-1">{doc.title}</h4>
+                            <p className="text-xs font-semibold text-indigo-600 mt-0.5">{doc.subject}</p>
+                          </div>
+                        </div>
+
+                        <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
+                          <span className="text-[11px] text-slate-400 flex items-center gap-1">
+                            <Icon name={doc.sourceType === 'file' ? 'file-text' : 'link'} size={14} />
+                            <span>{doc.sourceType === 'file' ? (doc.fileName || 'Tệp đính kèm') : 'Liên kết web'}</span>
+                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              onClick={() => handleOpenOrDownloadDoc(doc)}
+                              className="px-3 py-1.5 rounded-lg bg-indigo-50 text-indigo-600 hover:bg-indigo-100 text-xs font-bold transition-colors"
+                            >
+                              {doc.sourceType === 'file' ? 'Tải xuống' : 'Mở link'}
+                            </button>
+                            <button
+                              onClick={() => handleDeleteDoc(doc.id)}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                              title="Xóa"
+                            >
+                              <Icon name="trash-2" size={15} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* TAB 3: THỐNG KÊ */}
+            {activeTab === 'stats' && (
+              <div className="space-y-6">
+                <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-lg font-bold text-slate-900">Thống Kê Thời Gian Học Tập</h2>
+                    <p className="text-xs text-slate-500">Xem lại chi tiết thời gian tập trung học tập theo ngày, tuần, tháng và năm định dạng dd/mm/yyyy.</p>
+                  </div>
+                  
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex bg-slate-100 p-1 rounded-xl text-xs font-medium">
+                      <button onClick={() => setStatsMode('day')} className={`px-3 py-1.5 rounded-lg transition-all ${statsMode === 'day' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600'}`}>Ngày</button>
+                      <button onClick={() => setStatsMode('week')} className={`px-3 py-1.5 rounded-lg transition-all ${statsMode === 'week' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600'}`}>Tuần</button>
+                      <button onClick={() => setStatsMode('month')} className={`px-3 py-1.5 rounded-lg transition-all ${statsMode === 'month' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600'}`}>Tháng</button>
+                      <button onClick={() => setStatsMode('year')} className={`px-3 py-1.5 rounded-lg transition-all ${statsMode === 'year' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600'}`}>Năm</button>
+                    </div>
+                    <input
+                      type="date"
+                      value={statsDateInput}
+                      onChange={(e) => setStatsDateInput(e.target.value)}
+                      className="px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold focus:outline-indigo-600"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs flex items-center gap-4">
+                    <div className="w-12 h-12 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                      <Icon name="clock" size={24} />
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-500 font-medium">Tổng thời gian học</p>
+                      <h3 className="text-xl font-extrabold text-slate-900 mt-0.5">
+                        {Math.floor(totalStatsMinutes / 60)} giờ {totalStatsMinutes % 60} phút
+                      </h3>
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs flex items-center gap-4">
+                    <div className="w-12 h-12 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center">
+                      <Icon name="zap" size={24} />
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-500 font-medium">Phiên Pomodoro hoàn thành</p>
+                      <h3 className="text-xl font-extrabold text-slate-900 mt-0.5">{pomodoroSessions} phiên</h3>
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs flex items-center gap-4">
+                    <div className="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                      <Icon name="award" size={24} />
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-500 font-medium">Chuỗi học tập hiện tại</p>
+                      <h3 className="text-xl font-extrabold text-slate-900 mt-0.5">{currentDisplayStreak} ngày liên tiếp</h3>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-xs space-y-6">
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                      <Icon name="bar-chart" size={17} className="text-indigo-600" />
+                      <span>Biểu đồ thời gian học tập ({statsMode.toUpperCase()})</span>
+                    </h3>
+                    <span className="text-xs font-medium text-slate-400">Đơn vị: Phút</span>
+                  </div>
+
+                  <div className="h-64 flex items-end gap-2 sm:gap-4 pt-6 pb-2 px-2 border-b border-slate-100 overflow-x-auto">
+                    {statsChartData.map((item, idx) => {
+                      const heightPercent = maxStatsMinutes > 0 ? Math.max(8, Math.round((item.minutes / maxStatsMinutes) * 100)) : 8;
+                      return (
+                        <div key={idx} className="flex-1 flex flex-col items-center gap-2 min-w-[32px]">
+                          <span className="text-[10px] font-bold text-slate-600">{item.minutes}p</span>
+                          <div className="w-full bg-slate-100 rounded-t-xl h-48 flex items-end overflow-hidden">
+                            <div
+                              className="w-full bg-indigo-600 rounded-t-xl transition-all duration-500 hover:bg-indigo-700"
+                              style={{ height: `${heightPercent}%` }}
+                              title={`${item.label}: ${item.minutes} phút`}
+                            ></div>
+                          </div>
+                          <span className="text-[10px] font-medium text-slate-500 text-center truncate w-full">{item.label}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+              </div>
+            )}
+
+          </main>
+
+          {/* MODAL: THÊM MÔN HỌC MỚI */}
+          {isSubjectModalOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
+              <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl border border-slate-200 space-y-5 animate-in fade-in zoom-in duration-200">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-bold text-slate-900 text-base">Thêm môn học mới</h3>
+                  <button onClick={() => setIsSubjectModalOpen(false)} className="text-slate-400 hover:text-slate-700">
+                    <Icon name="x" size={18} />
+                  </button>
+                </div>
+
+                <form onSubmit={handleAddSubject} className="space-y-4">
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold text-slate-700">Tên môn học</label>
+                    <input
+                      type="text"
+                      placeholder="Ví dụ: Vật lí, Hóa học, Lịch sử..."
+                      value={newSubName}
+                      onChange={(e) => setNewSubName(e.target.value)}
+                      className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs focus:outline-indigo-600 font-medium"
+                      autoFocus
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-semibold text-slate-700">Chọn màu sắc chủ đạo</label>
+                    <div className="grid grid-cols-4 gap-2">
+                      {PRESET_COLORS.map((preset, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => setSelectedPresetColor(preset)}
+                          className={`flex items-center gap-2 p-2 rounded-xl border text-xs font-medium transition-all ${
+                            selectedPresetColor.name === preset.name ? 'border-slate-900 ring-2 ring-indigo-600/20' : 'border-slate-200 hover:bg-slate-50'
+                          }`}
+                        >
+                          <span className={`w-4 h-4 rounded-full ${preset.color}`}></span>
+                          <span className="truncate text-slate-700">{preset.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="pt-3 flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsSubjectModalOpen(false)}
+                      className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-semibold"
+                    >
+                      Hủy
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-sm"
+                    >
+                      Thêm môn học
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* MODAL: THÊM TÀI LIỆU MỚI */}
+          {isDocFormOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
+              <div className="bg-white rounded-2xl p-6 max-w-lg w-full shadow-2xl border border-slate-200 space-y-5">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-bold text-slate-900 text-base">Thêm tài liệu học tập mới</h3>
+                  <button onClick={() => setIsDocFormOpen(false)} className="text-slate-400 hover:text-slate-700">
+                    <Icon name="x" size={18} />
+                  </button>
+                </div>
+
+                {docError && <div className="p-3 bg-red-50 text-red-700 text-xs rounded-xl font-medium">{docError}</div>}
+
+                <form onSubmit={handleSaveDocument} className="space-y-4">
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold text-slate-700">Tên tài liệu</label>
+                    <input
+                      type="text"
+                      placeholder="Nhập tên tài liệu..."
+                      value={docTitle}
+                      onChange={(e) => setDocTitle(e.target.value)}
+                      className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs focus:outline-indigo-600 font-medium"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-xs font-semibold text-slate-700">Môn học</label>
+                      <input
+                        type="text"
+                        value={docSubject}
+                        onChange={(e) => setDocSubject(e.target.value)}
+                        className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs focus:outline-indigo-600 font-medium"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs font-semibold text-slate-700">Danh mục</label>
+                      <select
+                        value={docCategory}
+                        onChange={(e) => setDocCategory(e.target.value)}
+                        className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs focus:outline-indigo-600 font-medium bg-white"
+                      >
+                        {DOC_CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold text-slate-700">Loại nguồn tài liệu</label>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setDocSourceType('file')}
+                        className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-all ${docSourceType === 'file' ? 'bg-indigo-50 border-indigo-200 text-indigo-700' : 'border-slate-200 text-slate-600'}`}
+                      >
+                        Tệp từ máy (PDF, Docx, Ảnh)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDocSourceType('link')}
+                        className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-all ${docSourceType === 'link' ? 'bg-indigo-50 border-indigo-200 text-indigo-700' : 'border-slate-200 text-slate-600'}`}
+                      >
+                        Đường dẫn (URL)
+                      </button>
+                    </div>
+                  </div>
+
+                  {docSourceType === 'file' ? (
+                    <div className="space-y-1">
+                      <label className="text-xs font-semibold text-slate-700">Chọn tệp</label>
+                      <input
+                        type="file"
+                        onChange={(e) => {
+                          const file = e.target.files[0];
+                          if (file) {
+                            setDocFile(file);
+                            if (!docTitle) setDocTitle(file.name.replace(/\.[^/.]+$/, ""));
+                          }
+                        }}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs bg-slate-50 file:mr-4 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-indigo-600 file:text-white"
+                      />
+                    </div>
+                  ) : (
+                    <div className="space-y-1">
+                      <label className="text-xs font-semibold text-slate-700">Đường dẫn URL</label>
+                      <input
+                        type="text"
+                        placeholder="https://drive.google.com/..."
+                        value={docLink}
+                        onChange={(e) => setDocLink(e.target.value)}
+                        className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs focus:outline-indigo-600 font-medium"
+                      />
+                    </div>
+                  )}
+
+                  <div className="pt-3 flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsDocFormOpen(false)}
+                      className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-semibold"
+                    >
+                      Hủy
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSavingDoc}
+                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-sm"
+                    >
+                      {isSavingDoc ? 'Đang lưu...' : 'Lưu tài liệu'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* MODAL: CÀI ĐẶT GEMINI API KEY */}
+          {isSettingsOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
+              <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl border border-slate-200 space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-bold text-slate-900 text-base">Cài đặt Gemini API Key</h3>
+                  <button onClick={() => setIsSettingsOpen(false)} className="text-slate-400 hover:text-slate-700">
+                    <Icon name="x" size={18} />
+                  </button>
+                </div>
+                <p className="text-xs text-slate-500">Nhập Gemini API Key để tích hợp các tính năng AI thông minh vào StudyAI của bạn.</p>
+
+                <form onSubmit={(e) => {
+                  e.preventDefault();
+                  setApiKey(tempApiKey.trim());
+                  localStorage.setItem('studyai_gemini_key', tempApiKey.trim());
+                  setKeySavedToast(true);
+                  setTimeout(() => { setKeySavedToast(false); setIsSettingsOpen(false); }, 1000);
+                }} className="space-y-4">
+                  <input
+                    type="password"
+                    placeholder="AIzaSy..."
+                    value={tempApiKey}
+                    onChange={(e) => setTempApiKey(e.target.value)}
+                    className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs focus:outline-indigo-600 font-mono"
+                  />
+                  {keySavedToast && <div className="text-emerald-600 text-xs font-bold">Đã lưu API Key thành công!</div>}
+                  <div className="flex justify-end gap-2">
+                    <button type="button" onClick={() => setIsSettingsOpen(false)} className="px-4 py-2 rounded-xl border border-slate-200 text-xs font-semibold">Đóng</button>
+                    <button type="submit" className="px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold">Lưu lại</button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+        </div>
+      );
+    }
+
+    ReactDOM.render(<App />, document.getElementById('root'));
+  </script>
+</body>
+</html>
